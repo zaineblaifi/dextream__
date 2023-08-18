@@ -2,7 +2,14 @@ const express = require('express')
 const multer = require('multer');
 const session = require('express-session');
 const app = express();
-const fs = require('fs');
+//const fs = require('fs');
+const { body, validationResult } = require('express-validator');
+//const https=require('https');
+//const path=require('path');
+/*const sslServer=https.createServer({
+    key: fs.readFileSync(path.join(__dirname,'./cert/key.pem')), //私钥文件路径
+    cert: fs.readFileSync(path.join(__dirname, './cert/cert.pem'))//证书文件路径
+}, app)*/
 
 const cors=require('cors');
 const jwt=require('jsonwebtoken');
@@ -11,7 +18,7 @@ let bodyParser=require("body-parser");
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
-      cb(null, 'uploads/'); // Répertoire de stockage des vidéos
+      cb(null, 'uploads/'); 
     },
     filename: (req, file, cb) => {
       cb(null, Date.now() + '-' + file.originalname);
@@ -45,7 +52,7 @@ connection.connect();
  
 global.db = connection;
 
-//app.set('port', process.env.PORT || 8080);
+
 app.use(bodyParser.urlencoded({ extended: false }));
 app.use(bodyParser.json());
 
@@ -63,70 +70,83 @@ app.use(session({
 
 
 const bcrypt = require('bcrypt');
-const salt = 10; 
+const saltRounds = 10; 
 
-app.post('/register', (req, res) => {
-    const checkUserSql = "SELECT * FROM user WHERE email = ?";
-    const insertUserSql = "INSERT INTO user (`name`,`email`,`phone`,`password`) VALUES(?)";
-
-    // Vérification si l'utilisateur est déjà enregistré avec l'adresse e-mail fournie
-    connection.query(checkUserSql, [req.body.email], (err, rows) => {
-        if (err) {
-            return res.json({ Error: "Query Error in server" });
-        }
+app.post('/register', [
+    body('name').isLength({ min: 4 }).trim().escape(),
+    body('email').isEmail().normalizeEmail(),
+    body('phone').isMobilePhone().optional(),
+    body('password').isLength({ min: 8 }),
+  ], (req, res) => {
+            const checkUserSql = "SELECT * FROM user WHERE email = ?";
+            const insertUserSql = "INSERT INTO user (`name`,`email`,`phone`,`password`) VALUES(?)";
         
-        // Si l'utilisateur existe déjà, renvoyer un message d'erreur
-        if (rows.length > 0) {
+            const errors = validationResult(req);
+        
+            if (!errors.isEmpty()) {
+            return res.status(422).json({ errors: errors.array() });
+            }
+        
+            connection.query(checkUserSql, [req.body.email], (err, rows) => {
+            if (err) {
+            return res.json({ Error: "Query Error in server" });
+            }
+            if (rows.length > 0) {
             return res.json({ Error: "User already registered" });
-        }
-
-        // Si l'utilisateur n'existe pas, continuer avec l'insertion
-        bcrypt.hash(req.body.password.toString(), salt, (hashErr, hash) => {
+            }
+            bcrypt.hash(req.body.password.toString(), saltRounds, (hashErr, hash) => {
             if (hashErr) {
                 return res.json({ Error: "Error hashing password" });
             } else {
                 const values = [
-                    req.body.name,
-                    req.body.email,
-                    req.body.phone,
-                    hash
+                req.body.name,
+                req.body.email,
+                req.body.phone,
+                hash
                 ];
                 connection.query(insertUserSql, [values], (insertErr, result) => {
-                    if (insertErr) {
-                        return res.json({ Error: "Inserting data Error in server" });
-                    }
-                    return res.json({ Status: "Success" });
+                if (insertErr) {
+                    return res.json({ Error: "Inserting data Error in server" });
+                }
+                return res.json({ Status: "Success" });
                 });
-            }
-        });
-    });
-});
-app.post('/login',(req, res) => {
-    
-    const sql = 'SELECT * FROM user WHERE email=?';
-
-    connection.query(sql, [req.body.email], (err, data) => {
-        if (err) {
-            return res.json({ Error: 'Login error in server' });
+            }})
+    })});
+app.post('/login', [
+        body('email').isEmail().normalizeEmail(),
+        body('password').isLength({ min: 6 }),
+      ], (req, res) => {
+        const sql = 'SELECT * FROM user WHERE email=?';
+      
+        const errors = validationResult(req);
+      
+        if (!errors.isEmpty()) {
+          return res.status(422).json({ errors: errors.array() });
         }
-        if (data.length === 0) {
-            return res.json({ Error: 'No email existed' });
-        }
-        bcrypt.compare(req.body.password.toString(), data[0].password, (err, response) => {
-            if (err) {
-                return res.json({ Error: "Password compare error" });
-            }
-            if (response) {
-                const name = data[0].name;
-                const token = jwt.sign({ name }, "jwt--secret_key", { expiresIn: '1d' });
-                req.session.userId = data[0].id;
-                res.cookie('token', token);
-                return res.json({ Status: 'Success' });
-            } else {
-                return res.json({ Error: 'Password not matched' });
-            }
-        });
-    });
+      
+        connection.query(sql, [req.body.email], (err, data) => {
+       
+          if (err) {
+                  return res.json({ Error: 'Login error in server' });
+              }
+              if (data.length === 0) {
+                  return res.json({ Error: 'No email existed' });
+              }
+              bcrypt.compare(req.body.password.toString(), data[0].password, (err, response) => {
+                  if (err) {
+                      return res.json({ Error: "Password compare error" });
+                  }
+                  if (response) {
+                      const name = data[0].name;
+                      const token = jwt.sign({ name }, "jwt--secret_key", { expiresIn: '1d' });
+                      req.session.userId = data[0].id;
+                      res.cookie('token', token);
+                      return res.json({ Status: 'Success' });
+                  } else {
+                      return res.json({ Error: 'Password not matched' });
+                  }
+              });
+          });
 });
 
 app.get('/profile', (req, res) => {
@@ -141,7 +161,7 @@ app.get('/profile', (req, res) => {
         if (err) {
             return res.json({ Error: 'Error fetching user data' });
         }
-        res.json(result[0]); // Assuming you want to return a single user's data
+        res.json(result[0]); 
     });
 });
 
@@ -150,33 +170,32 @@ app.get('/logout', (req, res) => {
         if (err) {
             return res.json({ Error: 'Error logging out' });
         }
-        res.clearCookie('token'); // Clear the JWT cookie
+        res.clearCookie('token'); 
         res.json({ Status: 'Logged out' });
     });
 });
 
 const upload = multer({ storage });
+
 app.post('/Enreg_video', upload.single('video'), (req, res) => {
-    const videoPath = req.file.path;
-    const userId = req.session.userId; // Obtenez l'ID de l'utilisateur connecté
+    const userId = req.session.userId;
     const title = req.body.title;
     const description = req.body.description;
-  
-    const insertQuery = 'INSERT INTO videos (user_id, video_path, title, description) VALUES (?, ?, ?, ?)';
-    connection.query(insertQuery, [userId, videoPath, title, description], (error, results) => {
-      if (error) {
-        console.error('Erreur lors de l\'insertion dans la base de données : ', error);
-        res.status(500).json({ message: 'Erreur lors de l\'insertion dans la base de données.' });
-      } else {
-        console.log('Vidéo enregistrée dans la base de données.');
-    
-        // Supprimer le fichier du serveur une fois qu'il est enregistré
-        fs.unlinkSync(videoPath);
-    
-        res.status(200).json({ message: 'Vidéo téléchargée et enregistrée avec succès.' });
-      }
+    const videoData = req.file.buffer; 
+
+    const insertQuery = 'INSERT INTO videos (user_id, title, description, video_data) VALUES (?, ?, ?, ?)';
+    connection.query(insertQuery, [userId, title, description, videoData], (error, results) => {
+        if (error) {
+            console.error('Erreur lors de l\'insertion dans la base de données : ', error);
+            res.status(500).json({ message: 'Erreur lors de l\'insertion dans la base de données.' });
+        } else {
+            console.log('Vidéo enregistrée dans la base de données.');
+            res.status(200).json({ message: 'Vidéo enregistrée avec succès.' });
+        }
     });
-  });
+});
+
+
   
   
   
